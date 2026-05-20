@@ -1,4 +1,5 @@
 const express = require('express');
+const path = require('path');
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
@@ -129,7 +130,6 @@ app.post('/webhook', (req, res) => {
 
             const responseText = processMessage(from, text);
 
-            // Enviar respuesta via Meta API
             const phoneNumberId = value.metadata.phone_number_id;
             const accessToken = process.env.META_ACCESS_TOKEN;
 
@@ -154,6 +154,10 @@ app.post('/webhook', (req, res) => {
   } else {
     res.sendStatus(404);
   }
+});
+
+app.get('/privacidad', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'privacidad.html'));
 });
 
 app.get('/', (req, res) => {
