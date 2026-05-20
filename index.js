@@ -3,7 +3,8 @@ const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-// Estado de conversaciones activas
+const VERIFY_TOKEN = 'caminoverde2024';
+
 const sessions = {};
 
 const CASOS = [
@@ -31,7 +32,7 @@ function getSession(phone) {
 }
 
 function resetSession(phone) {
-  sessions[phone] = { step: 'welcome', data: {} };
+  sessions[phone] = { step: 'caso', data: {} };
 }
 
 function processMessage(phone, incomingMsg) {
@@ -40,8 +41,8 @@ function processMessage(phone, incomingMsg) {
   let response = '';
 
   switch (session.step) {
-
     case 'welcome':
+    case 'inicio':
       response = `¡Hola! 👋 Bienvenido al Despacho Jurídico Camino Verde.\n\nEstoy aquí para ayudarte a agendar una llamada con el Lic. Sergio Hernández.\n\n¿Cuál es el motivo de tu consulta?\n\n${CASOS.join('\n')}\n\n_Responde con el número de tu caso._`;
       session.step = 'caso';
       break;
@@ -66,7 +67,7 @@ function processMessage(phone, incomingMsg) {
 
     case 'colonia':
       session.data.colonia = msg;
-      response = `Perfecto. Para que el abogado llegue bien preparado a la llamada, ¿puedes describirme brevemente tu situación? (en 2 o 3 oraciones está bien 😊)`;
+      response = `Perfecto. Para que el abogado llegue bien preparado, ¿puedes describirme brevemente tu situación? (2 o 3 oraciones está bien 😊)`;
       session.step = 'descripcion';
       break;
 
@@ -91,32 +92,70 @@ function processMessage(phone, incomingMsg) {
 
     default:
       resetSession(phone);
-      response = `¡Hola! 👋 Bienvenido al Despacho Jurídico Camino Verde.\n\nEstoy aquí para ayudarte a agendar una llamada con el Lic. Sergio Hernández.\n\n¿Cuál es el motivo de tu consulta?\n\n${CASOS.join('\n')}\n\n_Responde con el número de tu caso._`;
-      sessions[phone].step = 'caso';
+      session.step = 'caso';
+      response = `¡Hola! 👋 Bienvenido al Despacho Jurídico Camino Verde.\n\n¿Cuál es el motivo de tu consulta?\n\n${CASOS.join('\n')}\n\n_Responde con el número de tu caso._`;
   }
 
   return response;
 }
 
-// Webhook principal
-app.post('/webhook', (req, res) => {
-  const incomingMsg = req.body.Body || '';
-  const from = req.body.From || '';
+// Verificación del webhook de Meta
+app.get('/webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
 
-  console.log(`Mensaje de ${from}: ${incomingMsg}`);
-
-  const responseText = processMessage(from, incomingMsg);
-
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Message>${responseText}</Message>
-</Response>`;
-
-  res.type('text/xml');
-  res.send(twiml);
+  if (mode === 'subscribe' && token === VERIFY_TOKEN) {
+    console.log('Webhook verificado por Meta ✅');
+    res.status(200).send(challenge);
+  } else {
+    res.sendStatus(403);
+  }
 });
 
-// Health check
+// Recibir mensajes de Meta WhatsApp Cloud API
+app.post('/webhook', (req, res) => {
+  const body = req.body;
+
+  if (body.object === 'whatsapp_business_account') {
+    body.entry?.forEach(entry => {
+      entry.changes?.forEach(change => {
+        const value = change.value;
+        if (value.messages) {
+          value.messages.forEach(async message => {
+            const from = message.from;
+            const text = message.text?.body || '';
+            console.log(`Mensaje de ${from}: ${text}`);
+
+            const responseText = processMessage(from, text);
+
+            // Enviar respuesta via Meta API
+            const phoneNumberId = value.metadata.phone_number_id;
+            const accessToken = process.env.META_ACCESS_TOKEN;
+
+            await fetch(`https://graph.facebook.com/v18.0/${phoneNumberId}/messages`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                messaging_product: 'whatsapp',
+                to: from,
+                type: 'text',
+                text: { body: responseText }
+              })
+            });
+          });
+        }
+      });
+    });
+    res.sendStatus(200);
+  } else {
+    res.sendStatus(404);
+  }
+});
+
 app.get('/', (req, res) => {
   res.send('Chatbot Despacho Jurídico Camino Verde — Activo ✅');
 });
